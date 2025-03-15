@@ -415,7 +415,59 @@ class PFSenseDNSResolverModule(PFSenseModuleBase):
         params = self.params
 
         obj = dict()
+        # Initialize with existing configuration
+        if self.root_elt is not None:
+            # Preserve existing hosts
+            existing_hosts = []
+            # Preserve existing custom options
+            existing_custom_options = []
+            custom_options_elt = self.root_elt.find("custom_options")
+            
+            if custom_options_elt is not None and custom_options_elt.text:
+                # Decode the base64-encoded custom options
+                decoded_custom_options = base64.b64decode(custom_options_elt.text).decode('utf-8')
+                # Split into lines for comparison
+                existing_custom_options = [line.strip() for line in decoded_custom_options.strip().split("\n")]
+                
+            if params.get("custom_options"):
+                new_custom_options = [line.strip() for line in params["custom_options"].strip().split("\n")]
+                merged_custom_options = existing_custom_options.copy()
+                for option in new_custom_options:
+                    if "view:" or "server:" in option:
+                        merged_custom_options.append(option)
+                    if option not in existing_custom_options:
+                        merged_custom_options.append(option)
+                        
+                obj["custom_options"] = base64.b64encode(bytes("\n".join(merged_custom_options), "utf-8")).decode()
+            
+            else:
+              # If no new custom options are provided, retain the existing ones
+              obj["custom_options"] = custom_options_elt.text if custom_options_elt is not None else ""
+                  
+                    
+            for host_elt in self.root_elt.findall("hosts"):
+                host_entry = {}
+                for child in host_elt:
+                    if child.tag == "aliases" and child.text is not None:
+                        # Handle aliases as a string if it's not an XML element
+                        host_entry["aliases"] = child.text
+                    else:
+                        host_entry[child.tag] = child.text
+                existing_hosts.append(host_entry)
 
+            # Preserve existing domain overrides
+            existing_overrides = []
+            for override_elt in self.root_elt.findall("domainoverrides"):
+                override_entry = {}
+                for child in override_elt:
+                    override_entry[child.tag] = child.text
+                existing_overrides.append(override_entry)
+
+            if existing_hosts:
+                obj["hosts"] = existing_hosts
+            if existing_overrides:
+                obj["domainoverrides"] = existing_overrides
+                
         if params["state"] == "present":
 
             obj["enable"] = ""
@@ -453,6 +505,40 @@ class PFSenseDNSResolverModule(PFSenseModuleBase):
             self._get_ansible_param(obj, "log_verbosity")
             self._get_ansible_param(obj, "hosts")
             self._get_ansible_param(obj, "domainoverrides")
+
+
+            # Append new hosts if provided
+            if params.get("hosts"):
+                if "hosts" not in obj:
+                    obj["hosts"] = []
+                
+                # Process new hosts
+                for new_host in params["hosts"]:
+                    # Format aliases for the new host
+                    if new_host.get("aliases"):
+                        new_host["aliases"] = {"item": new_host["aliases"]}
+                    else:
+                        new_host["aliases"] = "\n\t\t\t"
+                        
+                    # Check if host already exists and update it
+                    existing_host_index = next(
+                        (index for (index, nested_dict) in enumerate(obj["hosts"]) 
+                        if f"{nested_dict.get('host')}.{nested_dict.get('domain')}" == f"{new_host.get('host')}.{new_host.get('domain')}"), 
+                        None
+                    )
+                    
+                    if existing_host_index is not None:
+                        # Overwrite existing entry
+                        obj["hosts"][existing_host_index] = new_host
+                    else:
+                        # Add new entry
+                        obj["hosts"].append(new_host)
+
+            # Append new domain overrides if provided
+            if params.get("domainoverrides"):
+                if "domainoverrides" not in obj:
+                    obj["domainoverrides"] = []
+                obj["domainoverrides"].extend(params["domainoverrides"])
 
             if obj["active_interface"] != "all":
                 obj["active_interface"] += ",lo0"
@@ -567,6 +653,43 @@ clear_subsystem_dirty("unbound");
         # todo: hosts and domainoverrides is not logged
         return values
 
+    def _merge_param(self, obj, params, param_name, transform=None):
+        """Helper method to merge parameters only if they are provided"""
+        if params.get(param_name) is not None:
+            value = params[param_name]
+            if transform:
+                value = transform(value)
+            obj[param_name] = value
+
+    def _get_current_config(self):
+        """Get the current configuration from the target"""
+        if self.root_elt is None:
+            return None
+
+        current = {}
+
+        # Extract existing configuration into a dict
+        for child in self.root_elt:
+            if child.tag == "hosts":
+                if "hosts" not in current:
+                    current["hosts"] = []
+                host_entry = {}
+                for host_child in child:
+                    host_entry[host_child.tag] = host_child.text
+                current["hosts"].append(host_entry)
+
+            elif child.tag == "domainoverrides":
+                if "domainoverrides" not in current:
+                    current["domainoverrides"] = []
+                override_entry = {}
+                for override_child in child:
+                    override_entry[override_child.tag] = override_child.text
+                current["domainoverrides"].append(override_entry)
+
+            else:
+                current[child.tag] = child.text
+
+        return current
 
 def main():
     module = AnsibleModule(
