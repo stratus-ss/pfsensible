@@ -267,6 +267,11 @@ options:
     default: 1
     choices: [ 0, 1, 2, 3, 4, 5 ]
     type: int
+  preserve:
+    description: Preserve the current DNS entries instead of overriding them.
+    required: false
+    default: false
+    type: bool
 """
 
 EXAMPLES = """
@@ -371,7 +376,8 @@ DNS_RESOLVER_ARGUMENT_SPEC = dict(
     infra_host_ttl=dict(default=900, type='int', choices=[60, 120, 300, 600, 900]),
     infra_cache_numhosts=dict(default=10000, type='int', choices=[1000, 5000, 10000, 20000, 50000, 100000, 200000]),
     unwanted_reply_threshold=dict(default="disabled", type='str', choices=["disabled", "5000000", "10000000", "20000000", "40000000", "50000000"]),
-    log_verbosity=dict(default=1, type='int', choices=[0, 1, 2, 3, 4, 5])
+    log_verbosity=dict(default=1, type='int', choices=[0, 1, 2, 3, 4, 5]),
+    preserve=dict(default=False, type='bool'),
     # TODO: Disable Auto-added Access Control
     # TODO: Disable Auto-added Host Entries
     # TODO: Experimental Bit 0x20 Support
@@ -415,7 +421,7 @@ class PFSenseDNSResolverModule(PFSenseModuleBase):
         params = self.params
 
         obj = dict()
-        # Initialize with existing configuration
+        # Initialize with existing configuration_merg
         if self.root_elt is not None:
             # Preserve existing hosts
             existing_hosts = []
@@ -435,25 +441,29 @@ class PFSenseDNSResolverModule(PFSenseModuleBase):
                 for option in new_custom_options:
                     if "view:" or "server:" in option:
                         merged_custom_options.append(option)
-                    if option not in existing_custom_options:
+                    elif option not in existing_custom_options:
                         merged_custom_options.append(option)
+                    else:
+                      pass
                         
-                obj["custom_options"] = base64.b64encode(bytes("\n".join(merged_custom_options), "utf-8")).decode()
+                custom_opts_base64 = base64.b64encode(bytes("\n".join(merged_custom_options), "utf-8")).decode()
             
             else:
               # If no new custom options are provided, retain the existing ones
-              obj["custom_options"] = custom_options_elt.text if custom_options_elt is not None else ""
+              custom_opts_base64 = custom_options_elt.text if custom_options_elt is not None else ""
                   
-                    
-            for host_elt in self.root_elt.findall("hosts"):
-                host_entry = {}
-                for child in host_elt:
-                    if child.tag == "aliases" and child.text is not None:
-                        # Handle aliases as a string if it's not an XML element
-                        host_entry["aliases"] = child.text
-                    else:
-                        host_entry[child.tag] = child.text
-                existing_hosts.append(host_entry)
+            if params.get("preserve"):
+              for host_elt in self.root_elt.findall("hosts"):
+                  host_entry = {}
+                  for child in host_elt:
+                      if child.tag == "aliases" and child.text is not None:
+                          # Handle aliases as a string if it's not an XML element
+                          host_entry["aliases"] = child.text
+                      else:
+                          host_entry[child.tag] = child.text
+                  existing_hosts.append(host_entry)
+              existing_hosts.extend(params.get("hosts"))
+            # exit()
 
             # Preserve existing domain overrides
             existing_overrides = []
@@ -473,7 +483,6 @@ class PFSenseDNSResolverModule(PFSenseModuleBase):
             obj["enable"] = ""
             obj["active_interface"] = ",".join(self.get_interface_by_display_name(x) for x in params["active_interface"])
             obj["outgoing_interface"] = ",".join(self.get_interface_by_display_name(x) for x in params["outgoing_interface"])
-            obj["custom_options"] = base64.b64encode(bytes(params['custom_options'], 'utf-8')).decode()
             self._get_ansible_param_bool(obj, "hideidentity", value="")
             self._get_ansible_param_bool(obj, "hideversion", value="")
             self._get_ansible_param_bool(obj, "dnssecstripped", value="")
@@ -503,9 +512,14 @@ class PFSenseDNSResolverModule(PFSenseModuleBase):
             self._get_ansible_param(obj, "infra_cache_numhosts")
             self._get_ansible_param(obj, "unwanted_reply_threshold")
             self._get_ansible_param(obj, "log_verbosity")
-            self._get_ansible_param(obj, "hosts")
             self._get_ansible_param(obj, "domainoverrides")
-
+            obj["custom_options"] = base64.b64encode(bytes(params['custom_options'], 'utf-8')).decode()
+            if params.get("preserve"):
+              obj["hosts"] = existing_hosts
+              if existing_overrides:
+                obj["domainoverrides"] = existing_overrides
+              if existing_custom_options:
+                obj["custom_options"] = custom_opts_base64
 
             # Append new hosts if provided
             if params.get("hosts"):
@@ -553,7 +567,6 @@ class PFSenseDNSResolverModule(PFSenseModuleBase):
                 else:
                     # Default is an empty element
                     host["aliases"] = ""
-
         return obj
 
     def _validate_params(self):
