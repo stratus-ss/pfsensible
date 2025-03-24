@@ -534,20 +534,12 @@ class PFSenseDNSResolverModule(PFSenseModuleBase):
                     else:
                         new_host["aliases"] = "\n\t\t\t"
                         
-                    # Check if host already exists and update it
-                    existing_host_index = next(
-                        (index for (index, nested_dict) in enumerate(obj["hosts"]) 
-                        if f"{nested_dict.get('host')}.{nested_dict.get('domain')}" == f"{new_host.get('host')}.{new_host.get('domain')}"), 
-                        None
-                    )
-                    
+                    existing_host_index = self._find_host_index(obj, new_host)
+
                     if existing_host_index is not None:
-                        # Overwrite existing entry
                         obj["hosts"][existing_host_index] = new_host
                     else:
-                        # Add new entry
                         obj["hosts"].append(new_host)
-
             # Append new domain overrides if provided
             if params.get("domainoverrides"):
                 if "domainoverrides" not in obj:
@@ -565,9 +557,16 @@ class PFSenseDNSResolverModule(PFSenseModuleBase):
                         "item": tmp_aliases
                     }
                 else:
-                    # Default is an empty element
                     host["aliases"] = ""
         return obj
+
+    def _find_host_index(self, obj, new_host):
+      for index, nested_dict in enumerate(obj["hosts"]):
+        existing_host = f"{nested_dict.get('host')}.{nested_dict.get('domain')}"
+        new_host_fqdn = f"{new_host.get('host')}.{new_host.get('domain')}"
+        if existing_host == new_host_fqdn:
+            return index
+      return None
 
     def _validate_params(self):
         """ do some extra checks on input parameters """
