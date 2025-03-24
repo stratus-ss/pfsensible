@@ -666,44 +666,6 @@ clear_subsystem_dirty("unbound");
         # todo: hosts and domainoverrides is not logged
         return values
 
-    def _merge_param(self, obj, params, param_name, transform=None):
-        """Helper method to merge parameters only if they are provided"""
-        if params.get(param_name) is not None:
-            value = params[param_name]
-            if transform:
-                value = transform(value)
-            obj[param_name] = value
-
-    def _get_current_config(self):
-        """Get the current configuration from the target"""
-        if self.root_elt is None:
-            return None
-
-        current = {}
-
-        # Extract existing configuration into a dict
-        for child in self.root_elt:
-            if child.tag == "hosts":
-                if "hosts" not in current:
-                    current["hosts"] = []
-                host_entry = {}
-                for host_child in child:
-                    host_entry[host_child.tag] = host_child.text
-                current["hosts"].append(host_entry)
-
-            elif child.tag == "domainoverrides":
-                if "domainoverrides" not in current:
-                    current["domainoverrides"] = []
-                override_entry = {}
-                for override_child in child:
-                    override_entry[override_child.tag] = override_child.text
-                current["domainoverrides"].append(override_entry)
-
-            else:
-                current[child.tag] = child.text
-
-        return current
-
 def main():
     module = AnsibleModule(
         argument_spec=DNS_RESOLVER_ARGUMENT_SPEC,
