@@ -457,26 +457,26 @@ class PFSenseDNSResolverModule(PFSenseModuleBase):
             if params.get("custom_options"):
                 new_custom_options = [line.strip() for line in params["custom_options"].strip().split("\n")]
                 
-                # Smart deduplication: Extract unique DNS entries  
+                # Smart deduplication: NEW entries override EXISTING entries  
                 unique_entries = set()
                 merged_custom_options = []
                 
-                # Process existing options first
-                for line in existing_custom_options:
-                    normalized = self._normalize_dns_entry(line)
-                    if normalized and normalized not in unique_entries:
-                        unique_entries.add(normalized)
-                        merged_custom_options.append(line)
-                    elif not normalized:  # Keep non-DNS config lines (like "server:", "view:")
-                        merged_custom_options.append(line)
-                
-                # Process new options
+                # Process NEW options first (these take priority for updates)
                 for line in new_custom_options:
                     normalized = self._normalize_dns_entry(line)
                     if normalized and normalized not in unique_entries:
                         unique_entries.add(normalized)
                         merged_custom_options.append(line)
                     elif not normalized:  # Keep non-DNS config lines
+                        merged_custom_options.append(line)
+                
+                # Process existing options (only add if not already present)
+                for line in existing_custom_options:
+                    normalized = self._normalize_dns_entry(line)
+                    if normalized and normalized not in unique_entries:
+                        unique_entries.add(normalized)
+                        merged_custom_options.append(line)
+                    elif not normalized:  # Keep non-DNS config lines (like "server:", "view:")
                         merged_custom_options.append(line)
 
                 custom_opts_base64 = base64.b64encode(bytes("\n".join(merged_custom_options), "utf-8")).decode()
@@ -491,7 +491,7 @@ class PFSenseDNSResolverModule(PFSenseModuleBase):
                         else:
                             host_entry[child.tag] = child.text
                     existing_hosts.append(host_entry)
-                existing_hosts.extend(params.get("hosts"))
+                # Note: params["hosts"] will be processed separately below, don't extend here
 
             # Preserve existing domain overrides
             existing_overrides = []
@@ -622,14 +622,16 @@ class PFSenseDNSResolverModule(PFSenseModuleBase):
         if line.startswith(("name:", "view-first:", "access-control-view:")):
             return None
             
-        # Normalize local-zone entries: extract domain name only
+        # Normalize local-zone entries: extract domain name and type
         if line.startswith("local-zone:"):
-            match = re.search(r'"([^"]+)"', line)
+            match = re.search(r'"([^"]+)"\s+(\w+)', line)
             if match:
                 domain = match.group(1)
-                return f"zone:{domain}"
+                zone_type = match.group(2)
+                return f"zone:{domain}:{zone_type}"
         
-        # Normalize local-data entries: extract domain name only (ignore IP differences for now)
+        # Normalize local-data entries: extract domain name only (allow IP updates)
+        # Note: We only use domain for deduplication so IP updates work properly
         if line.startswith("local-data:"):
             match = re.search(r'"([^"]+)\s+', line)
             if match:
