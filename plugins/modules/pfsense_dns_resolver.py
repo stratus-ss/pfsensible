@@ -455,12 +455,9 @@ class PFSenseDNSResolverModule(PFSenseModuleBase):
                 new_custom_options = [line.strip() for line in params["custom_options"].strip().split("\n")]
                 merged_custom_options = existing_custom_options.copy()
                 for option in new_custom_options:
-                    if "view:" in option or "server:" in option:
+                    # Only add the option if it doesn't already exist
+                    if option not in existing_custom_options:
                         merged_custom_options.append(option)
-                    elif option not in existing_custom_options:
-                        merged_custom_options.append(option)
-                    else:
-                        pass
 
                 custom_opts_base64 = base64.b64encode(bytes("\n".join(merged_custom_options), "utf-8")).decode()
 
@@ -498,7 +495,6 @@ class PFSenseDNSResolverModule(PFSenseModuleBase):
             obj["enable"] = ""
             obj["active_interface"] = ",".join(self._get_interface_name(x) for x in params["active_interface"])
             obj["outgoing_interface"] = ",".join(self._get_interface_name(x) for x in params["outgoing_interface"])
-            obj["custom_options"] = base64.b64encode(bytes(params['custom_options'], 'utf-8')).decode()
             self._get_ansible_param_bool(obj, "hideidentity", value="")
             self._get_ansible_param_bool(obj, "hideversion", value="")
             self._get_ansible_param_bool(obj, "dnssecstripped", value="")
@@ -532,13 +528,19 @@ class PFSenseDNSResolverModule(PFSenseModuleBase):
             for domainoverride in obj.get("domainoverrides", []):
                 self._get_ansible_param_bool(domainoverride, "forward_tls_upstream", value="", params=domainoverride)
             
+            # Set custom options (use merged options if preserve=True and custom_options exist, otherwise use new params)
+            if params.get("preserve") and params.get("custom_options"):
+                obj["custom_options"] = custom_opts_base64
+            elif params.get("custom_options"):
+                obj["custom_options"] = base64.b64encode(bytes(params['custom_options'], 'utf-8')).decode()
+            elif params.get("preserve") and existing_custom_options:
+                obj["custom_options"] = custom_opts_base64
+                
             # Handle preserve functionality
             if params.get("preserve"):
                 obj["hosts"] = existing_hosts
                 if existing_overrides:
                     obj["domainoverrides"] = existing_overrides
-                if existing_custom_options:
-                    obj["custom_options"] = custom_opts_base64
 
             # Append new hosts if provided
             if params.get("hosts"):
