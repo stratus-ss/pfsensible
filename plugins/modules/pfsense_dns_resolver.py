@@ -456,11 +456,28 @@ class PFSenseDNSResolverModule(PFSenseModuleBase):
 
             if params.get("custom_options"):
                 new_custom_options = [line.strip() for line in params["custom_options"].strip().split("\n")]
-                merged_custom_options = existing_custom_options.copy()
-                for option in new_custom_options:
-                    # Only add the option if it doesn't already exist
-                    if option not in existing_custom_options:
-                        merged_custom_options.append(option)
+                
+                # Smart deduplication: Extract unique DNS entries  
+                unique_entries = set()
+                merged_custom_options = []
+                
+                # Process existing options first
+                for line in existing_custom_options:
+                    normalized = self._normalize_dns_entry(line)
+                    if normalized and normalized not in unique_entries:
+                        unique_entries.add(normalized)
+                        merged_custom_options.append(line)
+                    elif not normalized:  # Keep non-DNS config lines (like "server:", "view:")
+                        merged_custom_options.append(line)
+                
+                # Process new options
+                for line in new_custom_options:
+                    normalized = self._normalize_dns_entry(line)
+                    if normalized and normalized not in unique_entries:
+                        unique_entries.add(normalized)
+                        merged_custom_options.append(line)
+                    elif not normalized:  # Keep non-DNS config lines
+                        merged_custom_options.append(line)
 
                 custom_opts_base64 = base64.b64encode(bytes("\n".join(merged_custom_options), "utf-8")).decode()
 
@@ -589,6 +606,38 @@ class PFSenseDNSResolverModule(PFSenseModuleBase):
           if existing_host == new_host_fqdn:
               return index
         return None
+
+    def _normalize_dns_entry(self, line):
+        """
+        Normalize DNS entries to enable semantic deduplication.
+        Returns a normalized key for DNS records, or None for non-DNS config lines.
+        """
+        line = line.strip()
+        
+        # Skip empty lines and section headers
+        if not line or line in ["server:", "view:"]:
+            return None
+            
+        # Skip view configuration lines  
+        if line.startswith(("name:", "view-first:", "access-control-view:")):
+            return None
+            
+        # Normalize local-zone entries: extract domain name only
+        if line.startswith("local-zone:"):
+            match = re.search(r'"([^"]+)"', line)
+            if match:
+                domain = match.group(1)
+                return f"zone:{domain}"
+        
+        # Normalize local-data entries: extract domain name only (ignore IP differences for now)
+        if line.startswith("local-data:"):
+            match = re.search(r'"([^"]+)\s+', line)
+            if match:
+                domain = match.group(1)
+                return f"data:{domain}"
+                
+        # For other unrecognized lines, return the line itself for exact matching
+        return line
 
     def _validate_params(self):
         """ do some extra checks on input parameters """
