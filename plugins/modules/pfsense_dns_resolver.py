@@ -643,17 +643,25 @@ class PFSenseDNSResolverModule(PFSenseModuleBase):
         """ do some extra checks on input parameters """
         params = self.params
 
-        if params["sslcert"] and not self.pfsense.find_cert_elt(params["sslcert"]):
+        if params.get("sslcert") and not self.pfsense.find_cert_elt(params["sslcert"]):
             self.module.fail_json(msg=f'sslcert, {params["sslcert"]} is not a valid description of cert')
 
-        for host in params.get("hosts", []):
-            for ipaddr in host["ip"].split(","):
-                if not self.pfsense.is_ipv4_address(ipaddr):
-                    self.module.fail_json(msg=f'ip, {ipaddr} is not a ipv4 address')
+        # Safely validate hosts
+        hosts = params.get("hosts", [])
+        if hosts is not None:
+            for host in hosts:
+                if host and host.get("ip"):
+                    for ipaddr in host["ip"].split(","):
+                        if not self.pfsense.is_ipv4_address(ipaddr):
+                            self.module.fail_json(msg=f'ip, {ipaddr} is not a ipv4 address')
 
-        for domain in params.get("domainoverrides", []):
-            if not self.pfsense.is_ipv4_address(domain["ip"]):
-                self.module.fail_json(msg=f'ip, {domain["ip"]} is not a ipv4 address')
+        # Safely validate domain overrides
+        domainoverrides = params.get("domainoverrides", [])
+        if domainoverrides is not None:
+            for domain in domainoverrides:
+                if domain and domain.get("ip"):
+                    if not self.pfsense.is_ipv4_address(domain["ip"]):
+                        self.module.fail_json(msg=f'ip, {domain["ip"]} is not a ipv4 address')
 
         # Safely handle interface parameters that might be None
         active_interfaces = params.get("active_interface") or ["all"]
