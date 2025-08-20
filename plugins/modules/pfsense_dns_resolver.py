@@ -444,12 +444,15 @@ class PFSenseDNSResolverModule(PFSenseModuleBase):
             # Preserve existing custom options
             existing_custom_options = []
             custom_options_elt = self.root_elt.find("custom_options")
+            custom_opts_base64 = ""
 
             if custom_options_elt is not None and custom_options_elt.text:
                 # Decode the base64-encoded custom options
                 decoded_custom_options = base64.b64decode(custom_options_elt.text).decode('utf-8')
                 # Split into lines for comparison
                 existing_custom_options = [line.strip() for line in decoded_custom_options.strip().split("\n")]
+                # Set default base64 to existing options
+                custom_opts_base64 = custom_options_elt.text
 
             if params.get("custom_options"):
                 new_custom_options = [line.strip() for line in params["custom_options"].strip().split("\n")]
@@ -460,10 +463,6 @@ class PFSenseDNSResolverModule(PFSenseModuleBase):
                         merged_custom_options.append(option)
 
                 custom_opts_base64 = base64.b64encode(bytes("\n".join(merged_custom_options), "utf-8")).decode()
-
-            else:
-                # If no new custom options are provided, retain the existing ones
-                custom_opts_base64 = custom_options_elt.text if custom_options_elt is not None else ""
 
             if params.get("preserve"):
                 for host_elt in self.root_elt.findall("hosts"):
