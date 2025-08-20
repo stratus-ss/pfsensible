@@ -457,27 +457,8 @@ class PFSenseDNSResolverModule(PFSenseModuleBase):
             if params.get("custom_options"):
                 new_custom_options = [line.strip() for line in params["custom_options"].strip().split("\n")]
                 
-                # Smart deduplication: NEW entries override EXISTING entries  
-                unique_entries = set()
-                merged_custom_options = []
-                
-                # Process NEW options first (these take priority for updates)
-                for line in new_custom_options:
-                    normalized = self._normalize_dns_entry(line)
-                    if normalized and normalized not in unique_entries:
-                        unique_entries.add(normalized)
-                        merged_custom_options.append(line)
-                    elif not normalized:  # Keep non-DNS config lines
-                        merged_custom_options.append(line)
-                
-                # Process existing options (only add if not already present)
-                for line in existing_custom_options:
-                    normalized = self._normalize_dns_entry(line)
-                    if normalized and normalized not in unique_entries:
-                        unique_entries.add(normalized)
-                        merged_custom_options.append(line)
-                    elif not normalized:  # Keep non-DNS config lines (like "server:", "view:")
-                        merged_custom_options.append(line)
+                # Structure-aware merging: preserve sections while avoiding duplicates
+                merged_custom_options = self._merge_unbound_config(existing_custom_options, new_custom_options)
 
                 custom_opts_base64 = base64.b64encode(bytes("\n".join(merged_custom_options), "utf-8")).decode()
 
@@ -607,39 +588,57 @@ class PFSenseDNSResolverModule(PFSenseModuleBase):
               return index
         return None
 
-    def _normalize_dns_entry(self, line):
+    def _merge_unbound_config(self, existing_lines, new_lines):
         """
-        Normalize DNS entries to enable semantic deduplication.
-        Returns a normalized key for DNS records, or None for non-DNS config lines.
+        Smart merge: preserve structure, allow IP updates, prevent exact duplicates.
         """
-        line = line.strip()
+        merged_lines = []
         
-        # Skip empty lines and section headers
-        if not line or line in ["server:", "view:"]:
-            return None
-            
-        # Skip view configuration lines  
-        if line.startswith(("name:", "view-first:", "access-control-view:")):
-            return None
-            
-        # Normalize local-zone entries: extract domain name and type
-        if line.startswith("local-zone:"):
-            match = re.search(r'"([^"]+)"\s+(\w+)', line)
-            if match:
-                domain = match.group(1)
-                zone_type = match.group(2)
-                return f"zone:{domain}:{zone_type}"
+        # Track DNS entries that can be updated (domain name -> line index)
+        dns_entries = {}  # Format: "domain_name" -> (line_index, line_content)
         
-        # Normalize local-data entries: extract domain name only (allow IP updates)
-        # Note: We only use domain for deduplication so IP updates work properly
-        if line.startswith("local-data:"):
-            match = re.search(r'"([^"]+)\s+', line)
-            if match:
-                domain = match.group(1)
-                return f"data:{domain}"
-                
-        # For other unrecognized lines, return the line itself for exact matching
-        return line
+        # Process existing lines, tracking DNS entries
+        for i, line in enumerate(existing_lines):
+            line_stripped = line.strip()
+            merged_lines.append(line)
+            
+            # Track local-data entries for potential updates
+            if line_stripped.startswith("local-data:"):
+                domain_match = re.search(r'"([^"]+)\s+', line_stripped)
+                if domain_match:
+                    domain = domain_match.group(1)
+                    dns_entries[domain] = (len(merged_lines) - 1, line_stripped)
+        
+        # Track exact lines to avoid true duplicates  
+        seen_exact = set(line.strip() for line in existing_lines if line.strip())
+        
+        # Process new lines
+        for line in new_lines:
+            line_stripped = line.strip()
+            
+            # Handle local-data entries with potential IP updates
+            if line_stripped.startswith("local-data:"):
+                domain_match = re.search(r'"([^"]+)\s+', line_stripped)
+                if domain_match:
+                    domain = domain_match.group(1)
+                    if domain in dns_entries:
+                        # Update the existing entry with the new IP
+                        existing_idx, old_line = dns_entries[domain]
+                        merged_lines[existing_idx] = line
+                        seen_exact.discard(old_line)  # Remove old from seen
+                        seen_exact.add(line_stripped)  # Add new to seen
+                        continue
+            
+            # For all other lines, avoid exact duplicates
+            if line_stripped:
+                if line_stripped not in seen_exact:
+                    merged_lines.append(line)
+                    seen_exact.add(line_stripped)
+            else:
+                # Preserve empty lines for structure
+                merged_lines.append(line)
+        
+        return merged_lines
 
     def _validate_params(self):
         """ do some extra checks on input parameters """
